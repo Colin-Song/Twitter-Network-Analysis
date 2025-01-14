@@ -1,0 +1,899 @@
+# startup
+```{r}
+library(tidyverse)
+library(igraph)
+library(visNetwork)
+library(MASS)
+
+# read file
+nd <- as.data.frame(read_csv("./[INSERT_FILE_NAME].csv"))
+# users sending
+from_id <- nd[,1]
+# users receiving
+to_id <- nd[,2]
+```
+
+# add 1 to from_id list and to_id list
+```{r}
+# create new from_id list where we add 1 to each node id (this is because you cant have a node 0, must start at node 1)
+# initialize from_id_plus list 
+from_id_plus <- c()
+# iterate through nodes in from_id list
+for (i in from_id) {
+  # add node id plus 1 to from_id_plus list
+  from_id_plus <- c(from_id_plus, i+1)
+}
+# create new to_id list where we add 1 to each node id (this is because you cant have a node 0, must start at node 1)
+# initialize to_id_plus list
+to_id_plus <- c()
+# iterate through nodes in to_id list
+for (i in to_id) {
+  # add node id plus 1 to to_id_plus list
+  to_id_plus <- c(to_id_plus, i+1)
+}
+```
+
+# create directed list connecting from and to nodes
+```{r}
+# list with nodes
+from_to <- c()
+# index
+j <- 1
+# for loop to generate nodes with directed edges
+for (i in 1:dim(nd)) {
+  # get users sending (need to add 1 as can't have nodes starting with 0 in R)
+  from_to[j] <- nd[i,1]+1
+  j <- j + 1
+  # get users receiving
+  from_to[j] <- nd[i,2]+1
+  j <- j + 1
+}
+```
+
+
+
+### GRAPHING
+
+# create graph objects
+```{r}
+# create graph object
+g <- graph(from_to)
+# apply Louvain algorithm on graph object
+new_g <- cluster_louvain(as.undirected(g, mode = "collapse"), weights = NULL, resolution = 1)
+```
+
+# create variables used to create node/edge data frame
+```{r}
+# initialize list to get number of elements in each group
+group_lengths <- c()
+# get all unique node ids
+unique_node_ids <- c()
+# iterate through nodes in new_g
+for(i in 1:length(new_g)){
+  # add group of nodes to unique_node_ids list
+  unique_node_ids <- c(unique_node_ids, c(new_g[[i]]))
+  # add group length to group_lengths list
+  group_lengths <- c(group_lengths, length(new_g[[i]]))
+}
+```
+
+# create node data frame variables (for visNetwork graph)
+```{r}
+# create node labels
+# initialize node labels list
+node_labels <- c()
+# iterate through unique node ids
+for (i in unique_node_ids) {
+  # add node to node_labels
+  node_labels <- c(node_labels, as.character(i))
+}
+# create node groups
+# initialize node groups list
+node_groups <- c()
+# temp counter
+j <- 1
+# iterate through group_lengths list
+for (i in group_lengths) {
+  # repeat group id by value of i and add to node_groups list
+  node_groups <- c(node_groups, rep(j, i))
+  # increase j
+  j <- j + 1
+}
+# create node titles
+# initialize node titles list
+node_titles <- c()
+# iterate through unique node ids
+for (i in unique_node_ids) {
+  # create node title and add to list
+  node_titles <- c(node_titles, paste("Node", as.character(i), "info"))
+}
+# create nodes data frame for Louvain algorithm applied graph
+new_g_nodes <- data.frame(
+  id = unique_node_ids,
+  label = node_labels,
+  group = node_groups,
+  title = node_titles
+)
+```
+
+# create edge data frame variables (for visNetwork graph)
+```{r}
+# create edge labels
+# initialize edge labels list
+edge_labels <- c()
+# iterate with length of from_id_plus list
+for (i in 1:length(from_id_plus)) {
+  # create edge label and add to list
+  edge_labels <- c(edge_labels, paste("Edge", from_id_plus[i], "-", to_id_plus[i]))
+}
+# create edge titles
+# initialize edge titles list
+edge_titles <- c()
+# iterate with length of from_id_plus list
+for (i in 1:length(from_id_plus)) {
+  # create edge title and add to list
+  edge_titles <- c(edge_titles, paste("Edge from", from_id_plus[i], "to", to_id_plus[i]))
+}
+# create edges data frame for Louvain algorithm applied graph
+new_g_edges <- data.frame(
+  from = from_id_plus,
+  to = to_id_plus,
+  label = edge_labels,
+  arrows = "to",
+  title = edge_titles
+)
+```
+
+# graph using visNetwork
+```{r}
+#set.seed(11) (seed for similar looking graph)
+set.seed(24)
+visNetwork(new_g_nodes, new_g_edges, height = "850px", width = "100%") %>%
+  visIgraphLayout() %>%
+  visNodes(
+    shape = "dot",
+    color = list(
+      background = "#0085AF",
+      border = "#013848",
+      highlight = "#FF8000"
+    ),
+    shadow = list(enabled = FALSE, size = 35)
+  ) %>%
+  visEdges(
+    shadow = FALSE,
+    color = list(color = "#0085AF", highlight = "#C62F4B")
+  ) %>%
+  visOptions(highlightNearest = list(enabled = T, degree = 1, hover = T),
+             selectedBy = "group")
+```
+
+# graph using igraph
+```{r}
+set.seed(2)
+plot(g)
+set.seed(2)
+plot(new_g, g)
+```
+
+
+
+### ANALYSIS
+
+# CLOISTERED GRAPH
+
+# get all connections between nodes
+```{r}
+# node connections list
+node_connections <- c()
+# iterate through all nodes in from_to list
+for (i in seq(1, length(from_to), 2)){
+  # append each to node to respective from node
+  node_connections[[as.character(from_to[i])]] = c(node_connections[[as.character(from_to[i])]], from_to[i+1])
+}
+```
+
+# find edges that belong to same group or different group and find all node connections in same group
+```{r}
+# nodes in same group list
+group_node_connections <- list()
+# edges that belong to a group
+in_edge_groups <- list()
+# edges that leave a group
+out_edge_groups_f <- list()
+# edges that enter a group
+out_edge_groups_s <- list()
+
+# iterate through all edges
+for (i in 1:nrow(new_g_edges)){
+  # get from node
+  fnum <- new_g_edges$from[i]
+  # get to node
+  snum <- new_g_edges$to[i]
+  # find which group fnum belongs to
+  fnum_group <- new_g_nodes$group[which(new_g_nodes$id == fnum)]
+  # find which group snum belongs to
+  snum_group <- new_g_nodes$group[which(new_g_nodes$id == snum)]
+  
+  # if fnum and snum belong to same group
+  if(fnum_group == snum_group){
+    # add edge to in_edge_group
+    in_edge_groups[[as.character(fnum_group)]] <- c(in_edge_groups[[as.character(fnum_group)]], sprintf('(%i, %i)', fnum, snum))
+    # add nodes to group_node_connections
+    group_node_connections[[as.character(fnum)]] <- c(group_node_connections[[as.character(fnum)]], snum)
+  # fnum and snum don't belong to same group
+  } else{
+    # add edge to out_edge_group_f
+    out_edge_groups_f[[as.character(fnum_group)]] <- c(out_edge_groups_f[[as.character(fnum_group)]], sprintf('(%i, %i)', fnum, snum))
+    # add edges to out_edge_group_s
+    out_edge_groups_s[[as.character(snum_group)]] <- c(out_edge_groups_s[[as.character(snum_group)]], sprintf('(%i, %i)', fnum, snum))
+  }
+}
+```
+
+# find MPNE for each group
+```{r}
+# max possible number of edges in a group
+MPNE <- c()
+# iterate through all groups
+for (i in 1:length(new_g)) {
+  # max possible number of edges calculated as n * (n-1) / 2 where n = number of nodes
+  # append max possible number of edges to MPNE
+  MNPE <- c(MPNE, (length(new_g[[i]])*(length(new_g[[i]])-1))/2)
+}
+```
+
+# Cloistered Graph Analysis
+```{r}
+print("-------- Cloistered Graph Analysis --------")
+
+# iterate over different groups
+for (i in 1:length(MPNE)) {
+  # Group i analysis
+  print(sprintf("Group %i:", i))
+  # find total number of edges entering and leaving
+  edges_l_e <- length(out_edge_groups_f[[as.character(i)]]) + length(out_edge_groups_s[[as.character(i)]])
+  # how many edges are in each group
+  len_egroup <- length(in_edge_groups[[as.character(i)]])
+  # how close group is to that of a complete graph as a percentage
+  percent <-  len_egroup / (MPNE[[i]]) * 100
+  # how many edges are missing from that of a complete graph
+  missing_e <- MPNE[[i]] - len_egroup
+  # group is cloistered graph or not
+  cloistered <- FALSE
+  
+  # if number of edges leaving/entering group is 2 percent of max possible number of edges
+  # then consider it a cloistered group
+  if (edges_l_e < MPNE[[i]] * 0.02) {
+    # print statement
+    print(sprintf("   Group %i is a cloistered graph with %i edges leaving/entering the group", i, edges_l_e))
+    # set cloistered to TRUE
+    cloistered <- TRUE
+  # if more than 2 percent then don't consider a cloistered graph
+  } else {
+    # print statement
+    print(sprintf("   Group %i is not a cloistered graph with %i edges leaving/entering the group", i, edges_l_e))
+  }
+  
+  # if percentage = 100% and graph is a cloistered graph then group is an ideal cloistered graph
+  if (percent == 100 & cloistered & length(edges_l_e) == 0) {
+    # print statement
+    print(sprintf("   Group %i is an ideal cloistered graph", i))
+  # if percentage = 100% but not cloistered graph then only complete graph
+  } else if (percent == 100 & !cloistered){
+    # print statement
+    printf(sprintf("   Group %i is a complete graph", i))
+  # if percentage != 100% and not a cloistered graph
+  } else {
+    # print statement
+    print(sprintf("   Group %i is %f%% (%i/%i) of a complete graph with %i missing edges compared to that of a complete graph", i, percent, len_egroup, MPNE[[i]], missing_e))
+  }
+}
+```
+
+
+
+# TREE GRAPH
+
+# function to create tree
+```{r}
+create_tree <- function(tree = list(), level = 1, node) {
+  # if no nodes in current level of tree
+  if (is.null(tree[[as.character(level)]])) {
+    # add node to tree at level
+    tree[[as.character(level)]] <- node
+  # nodes exist in current level of tree
+  } else {
+    # add node to tree at level
+    tree[[as.character(level)]] <- c(tree[[as.character(level)]], node)
+  }
+  
+  # get children of  node
+  children <- group_node_connections[[as.character(node)]]
+  
+  # if node has children
+  if (!is.null(children)) {
+    # iterate through children
+    for (child in children) {
+      # recursive call
+      tree <- create_tree(tree, level + 1, child)
+    }
+  }
+
+  # return tree
+  return(tree)
+}
+```
+
+# check for cycle function
+```{r}
+has_cycle <- function(node_list, group_node_connections) {
+  # helper function for DFS
+  dfs <- function(node) {
+    
+    # if a node has not been visited
+    if (!visited[[node]]) {
+      # mark node as visited
+      visited[node] <- TRUE
+      # add node to recursion stack
+      rec_stack[node] <- TRUE
+      
+      # if the node is connected to other nodes in group
+      if (!is.null(group_node_connections[[as.character(node)]])) {
+        # iterate through other nodes in group
+        for (near_node in group_node_connections[[as.character(node)]]) {
+          # if the node has not been visited and recursion call on near_node
+          if (!visited[[near_node]] && dfs(near_node)) {
+            # return TRUE
+            return (TRUE)
+          # otherwise if the node near is on the recursion stack
+          } else if (rec_stack[[near_node]]) {
+            # return TRUE
+            return (TRUE)
+          }
+          
+        }
+      }
+    }
+    # remove the node from recursion stack
+    rec_stack[node] <- FALSE
+    # return FALSE
+    return (FALSE)
+  }
+  
+  # list for visited nodes
+  visited <- list()
+  # list for recursion stack
+  rec_stack <- list()
+  # initialize visited and recursion stack
+  for (node in node_list){
+    visited[node] <- FALSE
+    rec_stack[[node]] <- FALSE
+  }
+  
+  # check each node in the group
+  for (node in node_list) {
+    # if dfs(node is true then there is a cycle)
+    if (dfs(node)){
+      # return TRUE
+      return (TRUE)
+    }
+  }
+  # there is no cycle so return FALSE
+  return (FALSE)
+}
+```
+
+# function to find statistics
+```{r}
+tree_statistics <- function(tree, group_node_connections){
+  # set level error to 0
+  level_error <- 0
+  # set extra nodes to 0
+  extra_nodes <- 0
+  # set missing nodes to 0
+  missing_nodes <- 0
+  # set height balance to number of levels
+  height_balance <- length(names(tree))
+  # set nodes relative to ideal nodes to 0
+  nrin <- 0
+  # set total nodes to 1 (root node)
+  total_nodes <- 1
+  # set largest number of nodes in a level to 1 (root node)
+  lnol <- 1
+  # set number of nodes in a level to 1 (root node)
+  nol <- 1
+  
+  # iterate through all levels in tree (skip level 0)
+  for (level in names(tree)[-1]){
+    # increase total nodes by number of nodes on level
+    total_nodes <- total_nodes + length(tree[[as.character(level)]])
+    # get level number of previous level
+    prev_level <- as.character(as.numeric(level)-1)
+    
+    # if current number of nodes is greater than 2 ^ number of nodes from previous level
+    if (length(tree[[as.character(level)]]) > 2^length(tree[[prev_level]])){
+      # increase extra nodes by the difference
+      extra_nodes <- extra_nodes + length(tree[[as.character(level)]]) - 2^length(tree[[prev_level]])
+      # increase level error by 1
+      level_error <- level_error + 1
+    # if current number of nodes is less than 2 ^ number of nodes from previous level
+    } else if (length(tree[[as.character(level)]]) < 2^length(tree[[prev_level]])){
+      # increase missing nodes by difference
+      missing_nodes <- missing_nodes + 2^length(tree[[prev_level]]) - length(tree[[as.character(level)]])
+      # increase level error by 1
+      level_error <- level_error + 1
+    }
+    
+    # nol equal to number of nodes on current level
+    nol <- length(tree[[as.character(level)]])
+    # if nol less than or equal to lnol
+    if (nol <= lnol){
+      # decrease height_balance by 1
+      height_balance <- height_balance - 1
+    # if nol greater than lnol
+    } else {
+      # set lnol to nol
+      lnol <- nol
+    }
+    
+  }
+  
+  # set left_nodes to left half of children of root node
+  left_nodes <- head(tree[['1']], floor(length(tree[['1']])/2))
+  # set total left nodes to length of left_nodes
+  total_left_nodes <- length(left_nodes)
+  # set right_nodes to right half of children of root node
+  right_nodes <- tail(tree[['1']], ceiling(length(tree[['1']])/2))
+  # set total right nodes to length of right_nodes
+  total_right_nodes <- length(right_nodes)
+  
+  # iterate through all nodes of left_nodes
+  while (length(left_nodes) != 0){
+    # if first node in left_nodes has children
+    if (!is.null(group_node_connections[[as.character(left_nodes[1])]])){
+      # increase total_left_nodes by number of children
+      total_left_nodes <- total_left_nodes + length(group_node_connections[[as.character(left_nodes[1])]])
+      # append children to left_nodes
+      left_nodes <- c(left_nodes, group_node_connections[[as.character(left_nodes[1])]])
+    }
+    # pop off first node in left_nodes
+    left_nodes <- left_nodes[-1]
+  }
+  # iterate through all nodes of right_nodes
+  while (length(right_nodes) != 0){
+    # if first node of right_nodes has children
+    if (!is.null(group_node_connections[[as.character(right_nodes[1])]])){
+      # increase total_right_nodes by number of children
+      total_right_nodes <- total_right_nodes + length(group_node_connections[[as.character(right_nodes[1])]])
+      # append children to right_nodes
+      right_nodes <- c(right_nodes, group_node_connections[[as.character(right_nodes[1])]])
+    }
+    # pop off first node in right_nodes
+    right_nodes <- right_nodes[-1]
+  }
+  
+  # find nrin
+  nrin <- sprintf("%i/%i", total_nodes, 2^(length(names(tree)))-1)
+  
+  # return statistics
+  return (c(extra_nodes, missing_nodes, level_error, total_left_nodes, total_right_nodes, nrin, height_balance))
+}
+```
+
+# function to find value of tree based on analysis
+```{r}
+tree_analysis <- function(temp_tree_statistic){
+  left_nodes <- as.numeric(temp_tree_statistic[4])
+  right_nodes <- as.numeric(temp_tree_statistic[5])
+  # if left_nodes < right_nodes
+  if (left_nodes < right_nodes) {
+    # side_balance is ratio of left_nodes to right_nodes
+    side_balance <- left_nodes / right_nodes
+  # left_nodes > right_nodes
+  } else{
+    # side_balance is ratio of right_nodes to left_nodes
+    side_balance <- right_nodes / left_nodes
+  }
+  
+  # split nrin into numerator and denominator by /
+  fraction <- strsplit(temp_tree_statistic[6], "/")[[1]]
+  # get numerator of fraction
+  numerator <- as.numeric(fraction[1])
+  # get denominator of fraction
+  denominator <- as.numeric(fraction[2])
+  # calculate nrin
+  nrin <- numerator / denominator
+  
+  node_error <- as.numeric(temp_tree_statistic[1]) + as.numeric(temp_tree_statistic[2])
+  
+  # node_error has weight of 0.35
+  node_error_weight <- (1 - (node_error / denominator)) * 0.35
+  # level_error has weight of 0.25
+  level_error_weight <- (1 - (as.numeric(temp_tree_statistic[3]) / log((denominator+1), 2))) * 0.25
+  # nrin has weight of 0.15
+  nrin_weight <- nrin * 0.15
+  # side_balance has weight of 0.15
+  side_balance_weight <- side_balance * 0.15
+  # height_balance has weight of 0.1
+  height_balance_weight <- (1 - (as.numeric(temp_tree_statistic[7]) / log((denominator+1), 2))) * 0.1
+  
+  # sum up weights to calculate temp_tree_statistic and return max(0, weights)
+  return (max(0, (node_error_weight + level_error_weight + side_balance_weight + height_balance_weight + nrin_weight)))
+}
+```
+
+# Tree Graph Analysis
+```{r}
+print("-------- Tree Graph Analysis --------")
+
+# create new from_to list for finding cycle
+tree_cycle_graph_list <- list()
+# iterate through nodes in same group
+for (group in unique(new_g_nodes$group)){
+  # add nodes in same group to tree_cycle_graph_list
+  tree_cycle_graph_list[[as.character(group)]] <- new_g[[as.character(group)]]
+}
+     
+# create potential root nodes list
+potential_root_nodes <- list() 
+
+# get each group in tree_cycle_graph_list
+for (group in names(tree_cycle_graph_list)){
+  # group must have more than 1 node
+  if (length(tree_cycle_graph_list[[group]]) > 1) {
+    # if there is a cycle
+    if (has_cycle(tree_cycle_graph_list[[group]], group_node_connections)) {
+      # print statement
+      print(sprintf("   Group %s has a cycle so not a tree", group))
+    # group does not have cycle
+    } else {
+      # look at edges in edges leaving groups
+      for (edge in out_edge_groups_f[[group]]){
+        # extract number from edge
+        number <- gregexpr("[0-9]+", edge)
+        result <- regmatches(edge, number)
+        #get first number (the from node)
+        node <- as.numeric((result[[1]][1]))
+        # add node to potential root nodes list
+        potential_root_nodes[[group]] <- unique(c(potential_root_nodes[[group]], node))
+      }
+      # look at edges in edges entering groups
+      for (edge in out_edge_groups_s[[group]]){
+        # extract number from edge
+        number <- gregexpr("[0-9]+", edge)
+        result <- regmatches(edge, number)
+        #get first number (the from node)
+        node <- as.numeric((result[[1]][2]))
+        # add node to potential root nodes list
+        potential_root_nodes[[group]] <- unique(c(potential_root_nodes[[group]], node))
+      }
+      
+      # if there are no nodes for the group in potential_root_nodes list
+      if (length(potential_root_nodes[[group]]) == 0){
+        # add every node in the group to potential_root_nodes list
+        for (node in tree_cycle_graph_list[[group]]){
+          # only keep unique nodes
+          potential_root_nodes[[group]] <- unique(c(potential_root_nodes[[group]], node))
+        }
+      }
+      
+    }
+  }
+}
+  
+# create best root node analysis list (keeps track of best root node, best tree value, and best tree statistics)
+broot_node_analysis <- list()
+
+# group index
+group_i <- 1
+# iterate through groups in potential_root_nodes list
+for (group in names(potential_root_nodes)){
+  # statistic of best tree in group
+  best_tree_statistic <- c()
+  # analysis of best tree in group
+  best_tree_analysis <- 0
+  # root node in group that led to best tree
+  best_node <- 0
+  # iterate through nodes in groups in potential_root_nodes
+  for (node in potential_root_nodes[[group]]){
+    # create a tree for root node
+    tree <- create_tree(list(), 1, node)
+    
+    # get statistics of temp_tree
+    temp_tree_statistic <-  tree_statistics(tree, group_node_connections)
+    # get analysis of temp_tree
+    temp_tree_analysis <- tree_analysis(temp_tree_statistic)
+    
+    # if temp_tree analysis >= best_tree_analysis
+    if (temp_tree_analysis >= best_tree_analysis){
+      # set best_tree_statistic to temp_tree_statistic
+      best_tree_statistic <- temp_tree_statistic
+      # set best_tree_analysis to temp_tree_analysis
+      best_tree_analysis <- temp_tree_analysis
+      # set best_node to node
+      best_node <- node
+    }
+  }
+  # save best_tree_statistic in broot_node_analysis
+  broot_node_analysis[[group_i]] <- c(best_node, best_tree_analysis, best_tree_statistic)
+  
+  # Group i analysis
+  print(sprintf("Group %s:", group))
+  # if the tree statistic for the group is greater than or equal to 0.8 then the group is a tree
+  if (best_tree_analysis >= 0.7){
+    # print statements
+    print(sprintf("   Group %s is a tree graph with node %i being the root node", group, as.numeric(broot_node_analysis[[group_i]][1])))
+    print(sprintf("   %f%% of the group shares the same properties as those of an ideal tree graph", 100*as.numeric(broot_node_analysis[[group_i]][2])))
+    print(sprintf("   %i Node Errors (%i Extra Nodes, %i Missing Nodes), %i Level Errors, %i Left Nodes and %i Right Nodes, %s (%f%%) NRIN, %i Height Balance", as.numeric(broot_node_analysis[[group_i]][3])+as.numeric(broot_node_analysis[[group_i]][4]), as.numeric(broot_node_analysis[[group_i]][3]), as.numeric(broot_node_analysis[[group_i]][4]), as.numeric(broot_node_analysis[[group_i]][5]), as.numeric(broot_node_analysis[[group_i]][6]), as.numeric(broot_node_analysis[[group_i]][7]), broot_node_analysis[[group_i]][8], 100*as.numeric(eval(parse(text = broot_node_analysis[[group_i]][8]))),  as.numeric(broot_node_analysis[[group_i]][9])))
+  # if the tree statistic for the group is less than 0.8 then the group is not a tree
+  }else{
+    # print statements
+    print(sprintf("   Group %s is not a tree and has a structure closest to a tree graph when node %i is the root node", group, as.numeric(broot_node_analysis[[group_i]][1])))
+    print(sprintf("   %f%% of the group sharing the same properties as those of an ideal tree graph", 100*as.numeric(broot_node_analysis[[group_i]][2])))
+    print(sprintf("   %i Node Errors (%i Extra Nodes, %i Missing Nodes), %i Level Errors, %i Left Nodes and %i Right Nodes, %s (%f%%) NRIN, %i Height Balance", as.numeric(broot_node_analysis[[group_i]][3])+as.numeric(broot_node_analysis[[group_i]][4]), as.numeric(broot_node_analysis[[group_i]][3]), as.numeric(broot_node_analysis[[group_i]][4]), as.numeric(broot_node_analysis[[group_i]][5]), as.numeric(broot_node_analysis[[group_i]][6]), as.numeric(broot_node_analysis[[group_i]][7]), broot_node_analysis[[group_i]][8], 100*as.numeric(eval(parse(text = broot_node_analysis[[group_i]][8]))),  as.numeric(broot_node_analysis[[group_i]][9])))
+  }
+  # increase group_i by 1
+  group_i <- group_i + 1
+}
+```
+
+
+
+#LINE BRANCH GRAPH
+
+# function to find longest line in group
+```{r}
+longest_line <- function(node, group_node_connections, visited = c()) {
+  # if the initial node has been visited
+  if (node %in% visited){
+    # return length of 0 and an empty path
+    return(list(length = 0, path = c()))
+  } 
+  
+  # initial node has not been visited so add node to visited
+  visited <- c(visited, node)
+  
+  # if node does not have connections to other nodes
+  if (is.null(group_node_connections[[as.character(node)]])) 
+    # return length of 1 (just initial node) and the node as the path
+    return(list(length = 1, path = c(node)))
+  
+  # longest line length
+  max_length <- 0
+  # path of longest line
+  max_path <- c()
+  
+  # explore all nodes connected to node
+  for (near_node in group_node_connections[[as.character(node)]]) {
+    # recursive call
+    line <- longest_line(near_node, group_node_connections, visited)
+    # if the length of the line is greater than max_length
+    if (line$length > max_length) {
+      # set max_length to the line's length
+      max_length <- line$length
+      # set max_path to the line's path
+      max_path <- line$path
+    }
+  }
+  
+  # return max_length + 1 to include current node and max_path
+  return(list(length = max_length + 1, path = c(node, max_path)))
+}
+```
+
+# create reverse group node connections list
+```{r}
+# function to create reverse group node connections
+reverse_connections <- function(connections) {
+  # initialize reverse group node connections list
+  reversed <- list()
+  # iterate through all from nodes in connections list (from nodes: nodes that point to other nodes)
+  for (from in names(connections)) {
+    # iterate through all to nodes (to nodes: nodes that are pointed to)
+    for (to in connections[[from]]) {
+      # if to node is not in the names of reversed list
+      if (!as.character(to) %in% names(reversed)) {
+        # initialize nodes pointed at to node in reversed list
+        reversed[[as.character(to)]] <- c()
+      }
+      # add from node to reversed list at index to node
+      reversed[[as.character(to)]] <- c(reversed[[as.character(to)]], as.numeric(from))
+    }
+  }
+  # return reversed list
+  return(reversed)
+}
+
+# create reversed connections
+reversed_gn_connections <- reverse_connections(group_node_connections)
+```
+
+# function to find statistics
+```{r}
+lb_statistics <- function(line, group_nodes, group_node_connections){
+  # set branch_nodes to number of nodes connected to last node in line
+  branch_nodes <- group_node_connections[[as.character((tail(line, n=1)))]]
+
+  # set line_error to (number of nodes in group) - ((number of nodes in line) + (branching nodes))
+  line_error <- length(group_nodes) - (length(line) +  length(branch_nodes))
+  # set llrill to (number of nodes in line) / (2*log(length(branch_nodes) + 1) + 5)
+  llrill <- sprintf("%i/%i", length(line), as.integer((2*log(length(branch_nodes) + 1) + 5)))
+  
+  # initialize branch_continuation to 0
+  branch_continuation <- 0
+  # iterate through all branch_nodes
+  for (node in branch_nodes){
+    # add number of nodes connected to node to branch_continuation
+    branch_continuation <- branch_continuation + length(group_node_connections[[as.character(node)]])
+  }
+  
+  # initialize branch_positions
+  branch_positions <- c()
+  # set line_index to 0
+  line_index <- 0
+  
+  # iterate through nodes in line
+  for (node in line[-length(line)]){
+    # increase line_index by 1
+    line_index <- line_index + 1
+    # if the node has more than 1 connection in group
+    if (length(group_node_connections[[as.character(node)]]) > 1){
+      # add position relative to line to branch_positions
+      branch_positions <- c(branch_positions, sprintf("%i/%i", line_index, length(line)))
+      
+    }
+  }
+  if (length(branch_positions) == 0){
+    branch_positions = 0
+  }
+  
+  # return statistics
+  return (c(line_error, llrill, branch_continuation, branch_positions))
+}
+```
+
+# function to find value of line branch based on analysis
+```{r}
+lb_analysis <- function(lb_statistic){
+  # split llrill into numerator and denominator by /
+  fraction <- strsplit(lb_statistic[2], "/")[[1]]
+  # get numerator of fraction
+  line_length <- as.numeric(fraction[1])
+  # get denominator of fraction
+  i_line_length <- as.numeric(fraction[2])
+  # calculate llrill
+  llrill <- line_length / i_line_length
+  
+  # calculate how many branch nodes there are in group (isolate branch_nodes in ideal line length = 2*log(length(branch_nodes) + 1) + 5)
+  branch_nodes <- exp((i_line_length - 5)/2)-1
+  # calculate line_error such that line_error is relative to number of nodes in ideal line length + branching nodes
+  line_error <- as.integer(lb_statistic[1]) / (i_line_length + as.integer(branch_nodes))
+  
+  # calculate branch_continuation relative to number of nodes in line
+  branch_continuation <- as.integer(lb_statistic[3]) / line_length
+  
+  # initialize penalty_sum
+  penalty_sum <- 0
+  # iterate through positions of branching nodes in line relative to line
+  for (position_r in lb_statistic[4]){
+    # split position relative into numerator and denominator by /
+    fraction <- strsplit(position_r, "/")[[1]]
+    # get position (numerator)
+    position <- as.numeric(fraction[1])
+    # add ((number of nodes in line) - (position of branching node in line)) / (number of nodes in line) to penalty_sum
+    penalty_sum <- penalty_sum + ((line_length - position) / line_length)
+  }
+  
+  # calculate branch_position (1 - penalty_sum / (number of branching nodes in line))
+  branch_positions <- 1 - penalty_sum/length(lb_statistic[4])
+  
+  # line_error has weight of 0.4
+  line_error_weight <- (1 - line_error) * 0.4
+  # llrill has weight of 0.3
+  llrill_weight <- llrill * 0.3
+  # branch_continuation has weight of 0.2
+  branch_continuation_weight <- (1 - branch_continuation) * 0.2
+  # branch_positions has weight of 0.1
+  branch_positions_weight <- branch_positions * 0.1
+  
+  # sum up weights to calculate lb_statistic and return max(0, weights)
+  return (max(0, (line_error_weight + llrill_weight + branch_continuation_weight + branch_positions_weight)))
+}
+```
+
+# LINE BRANCH GRAPH ANALYSIS
+```{r}
+print("-------- Line Branch Graph Analysis --------")
+
+# create new from_to list for finding cycle
+lb_cycle_graph_list <- list()
+# iterate through nodes in same group
+for (group in unique(new_g_nodes$group)){
+  # add nodes in same group to lb_cycle_graph_list
+  lb_cycle_graph_list[[as.character(group)]] <- new_g[[as.character(group)]]
+}
+    
+# create potential end nodes list
+potential_end_nodes <- list()  
+
+# get each group in lb_cycle_graph_list
+for (group in names(lb_cycle_graph_list)){
+  # group must have more than 1 node
+  if (length(lb_cycle_graph_list[[group]]) > 1) {
+    # if there is a cycle
+    if (has_cycle(lb_cycle_graph_list[[group]], group_node_connections)) {
+      # print statement
+      print(sprintf("   Group %s has a cycle so not a line branch", group))
+    # group does not have cycle
+    } else {
+      potential_end_nodes[[group]] <- lb_cycle_graph_list[[group]]
+    }
+  }
+}
+
+# create best start node analysis list (keeps track of best start node, best line branch value, and best line branch statistics)
+bstart_path <- list()
+
+# iterate through groups in potential_end_nodes list
+for (group in names(potential_end_nodes)){
+  # path of longest line
+  temp_longest_path <- c()
+  # most branching nodes
+  largest_branch <- 0
+  # longest path with most branching
+  longest_path <- list()
+  # iterate through nodes in groups in potential_end_nodes
+  for (node in potential_end_nodes[[group]]){
+    # if the node has more branches than largest_branch
+    if (length(group_node_connections[[as.character(node)]]) > largest_branch){
+      # set largest_branch to the number of branches of the node
+      largest_branch <- length(group_node_connections[[as.character(node)]])
+      # set the longest_path to the longest line of nodes in the group that ends with node
+      longest_path <- longest_line(node, reversed_gn_connections)$path
+    # if the node has equal number of branches to largest_branch
+    } else if (length(group_node_connections[[as.character(node)]]) == largest_branch){
+      # find the longest line of nodes in the group that ends with node
+      temp_longest_path <- longest_line(node, reversed_gn_connections)$path
+      # if the length of this line is greater than the length of longest_path
+      if (length(temp_longest_path) > length(longest_path)){
+        # set longest_path to the line
+        longest_path <- temp_longest_path
+      }
+    }
+  }
+  # save path using best start node to bstart_path
+  bstart_path[[group]] <- c(rev(longest_path))
+}
+
+bstart_node_analysis <- list()
+# iterate through groups in potential_end_nodes list
+for (group in names(potential_end_nodes)){
+  # get line branch statistic using path in bstart_path at the group as the start node
+  lb_statistic <- lb_statistics(bstart_path[[group]], lb_cycle_graph_list[[group]], group_node_connections)
+  # get line branch value from lb_analysis
+  lb_value <- lb_analysis(lb_statistic)
+  # add line branch value and lb_statistic to bstart_node_analysis
+  bstart_node_analysis[[group]] <- c(lb_value, lb_statistic, bstart_path[[group]])
+  # Group i analysis
+  print(sprintf("Group %s:", group))
+  # if the line branch analysis for the group is greater than or equal to 0.8 then the group is a line branch
+  if (lb_value >= 0.7){
+    # print statements
+    print(sprintf("   Group %s is a line branch with node %i being the start node", group, as.numeric(bstart_node_analysis[[group]][6])))
+    last_i <- length(bstart_node_analysis[[group]])
+    print(sprintf("   The line is from node %s", paste(as.character(as.integer(bstart_node_analysis[[group]][6:last_i])), collapse=" to ")))
+    print(sprintf("   Node %s then branches into nodes %s", as.character(as.integer(bstart_node_analysis[[group]][last_i])), paste(as.character(group_node_connections[[as.character(bstart_node_analysis[[group]][last_i])]][1:length(group_node_connections[[as.character(bstart_node_analysis[[group]][last_i])]])]), collapse=", ")))
+    print(sprintf("   %f%% of the group shares the same properties as those of an ideal line branch", 100*as.numeric(bstart_node_analysis[[group]][1])))
+    print(sprintf("   %i Line Errors, %s (%f%%) LLRBN, %i Branch Continuation, %s Branch Positions", as.numeric(bstart_node_analysis[[group]][2]), bstart_node_analysis[[group]][3], 100*as.numeric(eval(parse(text = bstart_node_analysis[[group]][3]))), as.numeric(bstart_node_analysis[[group]][4]), bstart_node_analysis[[group]][5]))
+  # if the line branch analysis for the group is less than 0.8 then the group is not a line branch
+  }else{
+    # print statements
+    print(sprintf("   Group %s is not a line branch and has a structure closest to a line branch when node %i is the start node", group, as.numeric(bstart_node_analysis[[group]][6])))
+    last_i <- length(bstart_node_analysis[[group]])
+    print(sprintf("   The line is from node %s", paste(as.character(as.integer(bstart_node_analysis[[group]][6:last_i])), collapse=" to ")))
+    print(sprintf("   Node %s then branches into nodes %s", as.character(as.integer(bstart_node_analysis[[group]][last_i])), paste(as.character(group_node_connections[[as.character(bstart_node_analysis[[group]][last_i])]][1:length(group_node_connections[[as.character(bstart_node_analysis[[group]][last_i])]])]), collapse=", ")))
+    print(sprintf("   %f%% of the group shares the same properties as those of an ideal line branch", 100*as.numeric(bstart_node_analysis[[group]][1])))
+    print(sprintf("   %i Line Errors, %s (%f%%) LLRBN, %i Branch Continuation, %s Branch Positions", as.numeric(bstart_node_analysis[[group]][2]), bstart_node_analysis[[group]][3], 100*as.numeric(eval(parse(text = bstart_node_analysis[[group]][3]))), as.numeric(bstart_node_analysis[[group]][4]), bstart_node_analysis[[group]][5]))
+  }
+}
+```
